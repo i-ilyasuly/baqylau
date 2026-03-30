@@ -1,0 +1,9 @@
+opencv-python-headless
+ultralytics
+face_recognition
+firebase-admin
+google-genai
+requests
+Pillow
+fastapi
+uvicorn
