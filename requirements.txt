@@ -1,5 +1,5 @@
-%%writefile /content/baqylau/requirements.txt
-opencv-python-headless
+with open('/content/baqylau/requirements.txt', 'w') as f:
+    f.write("""opencv-python-headless
 face_recognition
 firebase-admin
 ultralytics
@@ -10,3 +10,4 @@ uvicorn
 requests
 numpy
 torch
+""")
