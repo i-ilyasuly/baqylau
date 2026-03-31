@@ -1,9 +1,12 @@
+%%writefile /content/baqylau/requirements.txt
 opencv-python-headless
-ultralytics
 face_recognition
 firebase-admin
+ultralytics
 google-genai
-requests
-Pillow
+google-cloud-secret-manager
 fastapi
 uvicorn
+requests
+numpy
+torch
