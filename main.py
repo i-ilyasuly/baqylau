@@ -6,7 +6,7 @@ from google.cloud import secretmanager
 from ultralytics import YOLO
 from google import genai
 from google.genai import types
-from fastapi import FastAPI
+from fastapi import FastAPI, Request  # ← Request қосылды (webhook үшін)
 import uvicorn
 
 BOT_TOKEN  = os.environ.get("BOT_TOKEN", "")
@@ -33,6 +33,44 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+# ── TELEGRAM WEBHOOK — СҰРАҚ ҚАБЫЛДАЙДЫ ──────────────────
+@app.post("/webhook")
+async def webhook(request: Request):
+    # Telegram-дан келген JSON деректерді оқу
+    data = await request.json()
+
+    # Хабар мен chat_id алу
+    msg     = data.get("message", {})
+    text    = msg.get("text", "").lower()  # ← кіші әріпке — сұрақты оңай табу үшін
+    chat_id = msg.get("chat", {}).get("id")
+
+    if not chat_id or not text:
+        return {"ok": True}  # ← бос хабар болса өткіз
+
+    # ─── СҰРАҚ-ЖАУАП ЛОГИКАСЫ ────────────────────────────
+    if any(w in text for w in ["кім келді", "кім бар", "кто пришел"]):
+        # Бүгінгі оқиғаларды Firestore-дан оқып жауап береді
+        answer = get_today_events()
+        send_message_to(chat_id, answer)
+
+    elif any(w in text for w in ["сәлем", "сәлеметсіз", "привет", "/start"]):
+        send_message_to(chat_id,
+            "Сәлем! 👋 Мен Baqylau — үйіңнің ақылды қарауылымын!\n\n"
+            "Сұрай аласың:\n"
+            "• Бүгін кім келді?\n"
+            "• Апа нешеде келді?\n"
+            "• Белгісіз адам болды ма?"
+        )
+
+    else:
+        # Басқа сұрақтарды Gemini арқылы жауаптайды
+        events  = get_today_events()
+        prompt  = f"Бүгінгі оқиғалар: {events}\n\nСұрақ: {text}\n\nҚазақ тілінде қысқа жауап бер."
+        answer  = describe_with_gemini_text(prompt)
+        send_message_to(chat_id, answer)
+
+    return {"ok": True}
 
 # ── БАРЛЫҚ АУЫР ЖҮКТЕМЕ — ФОНДА ───────────────────────────
 def initialize():
@@ -89,10 +127,21 @@ def load_known_faces():
     except Exception as e:
         print(f"❌ known_faces қате: {e}")
 
+# ── TELEGRAM ФУНКЦИЯЛАРЫ ───────────────────────────────────
+
 def send_message(text):
+    # Негізгі CHAT_ID-ге (камера хабарлары үшін)
     try:
         requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
                       data={"chat_id": CHAT_ID, "text": text})
+    except Exception as e:
+        print(f"❌ Telegram қате: {e}")
+
+def send_message_to(chat_id, text):
+    # Webhook сұрақтарына жауап беру үшін (кез-келген chat_id-ге)
+    try:
+        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                      data={"chat_id": chat_id, "text": text})
     except Exception as e:
         print(f"❌ Telegram қате: {e}")
 
@@ -103,6 +152,8 @@ def send_photo(img_bytes, caption=""):
                       files={"photo": ("frame.jpg", img_bytes, "image/jpeg")})
     except Exception as e:
         print(f"❌ Telegram фото қате: {e}")
+
+# ── FIRESTORE ФУНКЦИЯЛАРЫ ──────────────────────────────────
 
 def save_event(name):
     if not db:
@@ -118,7 +169,32 @@ def save_event(name):
     except Exception as e:
         print(f"❌ Firestore жазу қате: {e}")
 
+def get_today_events():
+    # Бүгінгі оқиғаларды Firestore-дан оқу
+    if not db:
+        return "Деректер қорына қосылу мүмкін болмады"
+    try:
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        docs  = db.collection("events").stream()
+
+        # Python-да сүзу — composite index жасамай-ақ жұмыс жасайды
+        today_events = []
+        for doc in docs:
+            d = doc.to_dict()
+            if d.get("date") == today:
+                today_events.append(f"👤 {d['name']} — {d['time']}-де")
+
+        if today_events:
+            return "📋 Бүгін үйде болғандар:\n" + "\n".join(today_events)
+        else:
+            return "Бүгін ешкім тіркелмеді"
+    except Exception as e:
+        return f"Қате: {e}"
+
+# ── GEMINI ФУНКЦИЯЛАРЫ ─────────────────────────────────────
+
 def describe_with_gemini(frame):
+    # Кадрды суретпен Gemini-ге жіберіп қазақша сипаттама алу
     if not gemini_client:
         return ""
     try:
@@ -133,6 +209,21 @@ def describe_with_gemini(frame):
         return resp.text
     except Exception as e:
         return f"Gemini қате: {e}"
+
+def describe_with_gemini_text(prompt):
+    # Мәтін сұрақ қою — webhook жауаптары үшін
+    if not gemini_client:
+        return "Gemini қосылмаған"
+    try:
+        resp = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[prompt]
+        )
+        return resp.text
+    except Exception as e:
+        return f"Gemini қате: {e}"
+
+# ── КАМЕРА ЦИКЛЫ ───────────────────────────────────────────
 
 last_seen = {}
 
