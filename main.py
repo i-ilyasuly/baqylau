@@ -65,9 +65,9 @@ async def webhook(request: Request):
 
     else:
         # Басқа сұрақтарды Gemini арқылы жауаптайды
-        events  = get_today_events()
-        prompt  = f"Бүгінгі оқиғалар: {events}\n\nСұрақ: {text}\n\nҚазақ тілінде қысқа жауап бер."
-        answer  = describe_with_gemini_text(prompt)
+        events = get_today_events()
+        prompt = f"Бүгінгі оқиғалар: {events}\n\nСұрақ: {text}\n\nҚазақ тілінде қысқа жауап бер."
+        answer = describe_with_gemini_text(prompt)
         send_message_to(chat_id, answer)
 
     return {"ok": True}
@@ -78,7 +78,7 @@ def initialize():
 
     print("🔄 Инициализация басталды...")
 
-    # Secret Manager → Firestore
+    # Secret Manager → Firestore кілтін қауіпсіз алу
     try:
         sm_client   = secretmanager.SecretManagerServiceClient()
         secret_name = f"projects/{PROJECT_ID}/secrets/firestore-sa-key/versions/latest"
@@ -91,31 +91,33 @@ def initialize():
     except Exception as e:
         print(f"❌ Firestore қате: {e}")
 
-    # YOLO
+    # YOLO — адам, объект табу моделі
     try:
         yolo_model = YOLO("yolov8n.pt")
         print("✅ YOLO жүктелді!")
     except Exception as e:
         print(f"❌ YOLO қате: {e}")
 
-    # Gemini
+    # Gemini — AI сипаттама беру клиенті
     try:
         gemini_client = genai.Client(api_key=GEMINI_KEY)
         print("✅ Gemini қосылды!")
     except Exception as e:
         print(f"❌ Gemini қате: {e}")
 
-    # known_faces жүктеу
+    # known_faces — таныс адамдар тізімін Firestore-дан жүктеу
     if db:
         load_known_faces()
 
     app_ready = True
     print("🚀 Baqylau толық дайын!")
 
-    # Камера циклы
+    # Камера циклы — фонда үздіксіз жұмыс жасайды
     camera_loop()
 
+
 def load_known_faces():
+    # Firestore-дан Апа, Сезім т.б. бет деректерін жүктеу
     global known_face_encodings, known_face_names
     try:
         docs = db.collection("known_faces").stream()
@@ -127,25 +129,29 @@ def load_known_faces():
     except Exception as e:
         print(f"❌ known_faces қате: {e}")
 
+
 # ── TELEGRAM ФУНКЦИЯЛАРЫ ───────────────────────────────────
 
 def send_message(text):
-    # Негізгі CHAT_ID-ге (камера хабарлары үшін)
+    # Негізгі CHAT_ID-ге жіберу (камера хабарлары үшін)
     try:
         requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
                       data={"chat_id": CHAT_ID, "text": text})
     except Exception as e:
         print(f"❌ Telegram қате: {e}")
 
+
 def send_message_to(chat_id, text):
-    # Webhook сұрақтарына жауап беру үшін (кез-келген chat_id-ге)
+    # Webhook сұрақтарына жауап беру — кез-келген chat_id-ге
     try:
         requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
                       data={"chat_id": chat_id, "text": text})
     except Exception as e:
         print(f"❌ Telegram қате: {e}")
 
+
 def send_photo(img_bytes, caption=""):
+    # Негізгі CHAT_ID-ге фото жіберу (камерадан сурет)
     try:
         requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
                       data={"chat_id": CHAT_ID, "caption": caption},
@@ -153,9 +159,11 @@ def send_photo(img_bytes, caption=""):
     except Exception as e:
         print(f"❌ Telegram фото қате: {e}")
 
+
 # ── FIRESTORE ФУНКЦИЯЛАРЫ ──────────────────────────────────
 
 def save_event(name):
+    # Адам танылғанда оқиғаны Firestore-ға жазу
     if not db:
         return
     try:
@@ -168,6 +176,7 @@ def save_event(name):
         })
     except Exception as e:
         print(f"❌ Firestore жазу қате: {e}")
+
 
 def get_today_events():
     # Бүгінгі оқиғаларды Firestore-дан оқу
@@ -191,10 +200,41 @@ def get_today_events():
     except Exception as e:
         return f"Қате: {e}"
 
+
+def is_recently_seen(name):
+    # Firestore-дан соңғы көру уақытын оқу
+    # Егер 300 секунд (5 мин) өтпесе — True қайтарады, хабар жібермейді
+    # 25-ҚАДАМ: бұрын last_seen={} тек жадта болатын, Cloud Run қайта іске қосылса тазаланатын
+    # Енді Firestore-да сақталады — Cloud Run рестарт болса да жұмыс жасайды
+    if not db:
+        return False
+    try:
+        doc = db.collection("last_seen").document(name).get()
+        if doc.exists:
+            last_ts = doc.to_dict().get("timestamp", 0)
+            if time.time() - last_ts < 300:
+                return True  # ← жақында көрілген, қайта хабарлама жібермейді
+    except:
+        pass
+    return False  # ← жаңа немесе 5 минут өткен, хабарлама жіберуге болады
+
+
+def set_last_seen(name):
+    # Адам танылған соң Firestore-ға соңғы уақытын жазу
+    if not db:
+        return
+    try:
+        db.collection("last_seen").document(name).set({
+            "timestamp": time.time()
+        })
+    except Exception as e:
+        print(f"❌ last_seen жазу қате: {e}")
+
+
 # ── GEMINI ФУНКЦИЯЛАРЫ ─────────────────────────────────────
 
 def describe_with_gemini(frame):
-    # Кадрды суретпен Gemini-ге жіберіп қазақша сипаттама алу
+    # Камера кадрын суретпен Gemini-ге жіберіп қазақша сипаттама алу
     if not gemini_client:
         return ""
     try:
@@ -210,6 +250,7 @@ def describe_with_gemini(frame):
     except Exception as e:
         return f"Gemini қате: {e}"
 
+
 def describe_with_gemini_text(prompt):
     # Мәтін сұрақ қою — webhook жауаптары үшін
     if not gemini_client:
@@ -223,12 +264,12 @@ def describe_with_gemini_text(prompt):
     except Exception as e:
         return f"Gemini қате: {e}"
 
-# ── КАМЕРА ЦИКЛЫ ───────────────────────────────────────────
 
-last_seen = {}
+# ── КАМЕРА ЦИКЛЫ ───────────────────────────────────────────
 
 def camera_loop():
     if RTSP_URL == "test":
+        # Нақты камера жоқ кезде — күту режимі
         print("⚠️ RTSP_URL='test' — нақты камера жоқ, күту режимінде...")
         while True:
             time.sleep(60)
@@ -240,44 +281,66 @@ def camera_loop():
                 print("⚠️ Камера ажырады, қайта қосылуда...")
                 time.sleep(5)
                 continue
+
             while True:
                 ret, frame = cap.read()
                 if not ret:
                     break
+
+                # YOLO — алдымен адам бар-жоғын тексеру (Gemini-ді үнемдеу)
                 if yolo_model:
                     results = yolo_model(frame, verbose=False)
                     persons = [b for b in results[0].boxes
                                if int(b.cls[0]) == 0 and float(b.conf[0]) > 0.5]
                     if not persons:
                         time.sleep(1)
-                        continue
+                        continue  # ← адам жоқ — келесі кадрға өт
+
+                # Face Recognition — адамды атымен тану
                 rgb       = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 face_encs = face_recognition.face_encodings(rgb,
                                 face_recognition.face_locations(rgb))
+
                 for enc in face_encs:
                     name = "Белгісіз"
+
+                    # Firestore-дан жүктелген таныс адамдармен салыстыру
                     if known_face_encodings:
                         dists = face_recognition.face_distance(known_face_encodings, enc)
                         best  = int(np.argmin(dists))
-                        if dists[best] < 0.5:
+                        if dists[best] < 0.5:  # ← 0.5 шек мән — жақынырақ = дұрысырақ
                             name = known_face_names[best]
-                    now_ts = time.time()
-                    if name in last_seen and now_ts - last_seen[name] < 300:
-                        continue
-                    last_seen[name] = now_ts
+
+                    # 25-ҚАДАМ: is_recently_seen() — Firestore-дан тексереді
+                    # Бұрын: last_seen[name] — тек жадта
+                    # Енді: Firestore-да — Cloud Run рестарт болса да жұмыс жасайды
+                    if is_recently_seen(name):
+                        continue  # ← 5 минут өтпесе хабарлама жібермейді
+
+                    # Соңғы уақытты Firestore-ға жазу
+                    set_last_seen(name)
+
+                    # Оқиғаны Firestore-ға жазу
                     save_event(name)
+
+                    # Gemini — кадрды қазақша сипаттау
                     desc   = describe_with_gemini(frame)
                     t_str  = datetime.datetime.now().strftime("%H:%M")
                     _, buf = cv2.imencode(".jpg", frame)
+
+                    # Telegram-ға фото + сипаттама жіберу
                     send_photo(buf.tobytes(), f"👤 {name} үйде! ({t_str})\n\n🤖 {desc}")
+
                 time.sleep(1)
             cap.release()
+
         except Exception as e:
             print(f"❌ Камера циклы қате: {e}")
         time.sleep(5)
 
+
 if __name__ == "__main__":
-    # Фонда инициализация — FastAPI бірден іске қосылады
+    # Фонда инициализация — FastAPI бірден іске қосылады (Cloud Run timeout болмасын)
     threading.Thread(target=initialize, daemon=True).start()
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
