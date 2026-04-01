@@ -24,6 +24,10 @@ RUN pip install --no-cache-dir dlib
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# ← ЖАңА ҚОСЫЛДЫ: YOLO моделін Image-ке алдын ала жүктеу
+# Енді Cloud Run іске қосылған сайын интернеттен жүктемейді!
+RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
+
 COPY . .
 
 CMD ["python", "main.py"]
